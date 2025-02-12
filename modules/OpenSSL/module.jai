@@ -23,6 +23,7 @@ TLS_client_method :: () -> *SSL_METHOD #foreign libssl;
 
 SSL_CTX :: struct {};
 SSL_CTX_new :: (meth: *SSL_METHOD) -> *SSL_CTX #foreign libssl;
+SSL_CTX_free :: (ctx: *SSL_CTX) #foreign libssl;
 
 ssl_print_errors :: () {
     while true {
@@ -33,13 +34,18 @@ ssl_print_errors :: () {
     }
 }
 
+SSL_SENT_SHUTDOWN :: 1;
+SSL_RECEIVED_SHUTDOWN :: 2;
+
 SSL :: struct {};
 SSL_new  :: (ctx: *SSL_CTX) -> *SSL #foreign libssl;
 SSL_free :: (ssl: *SSL) #foreign libssl;
-SSL_set_fd :: (s: *SSL, fd: s32) -> s32 #foreign libssl;
+SSL_set_fd :: (ssl: *SSL, fd: s32) -> s32 #foreign libssl;
 SSL_connect :: (ssl: *SSL) -> s32 #foreign libssl;
 SSL_read  :: (ssl: *SSL, buf: *u8, num: s32) -> s32 #foreign libssl;
 SSL_write :: (ssl: *SSL, buf: *u8, num: s32) -> s32 #foreign libssl;
+SSL_set_shutdown :: (ssl: *SSL, mode: s32) #foreign libssl;
+SSL_shutdown :: (ssl: *SSL) -> s32 #foreign libssl;
 
 ERR_get_error :: () -> u64 #foreign libssl;
 ERR_error_string :: (e: u64, buf: *u8) -> *u8 #foreign libssl;

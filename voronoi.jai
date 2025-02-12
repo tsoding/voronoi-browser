@@ -6,9 +6,9 @@
 
 #import "OpenSSL";
 
-PORT :: "1965";
+GEMINI_PORT :: "1965";
 
-shift :: (xs: *[]string) -> string {
+shift :: (xs: *[]$T) -> T {
     assert(xs.count > 0);
     result := xs.data;
     xs.data += 1;
@@ -24,7 +24,7 @@ main :: () {
     if args.count <= 0 {
         print("Usage: % <URL>\n", program_name);
         print("ERROR: expected gemini URL\n");
-        exit(69);
+        exit(1);
     }
 
     url := shift(*args);
@@ -48,7 +48,7 @@ main :: () {
     };
 
     addrs: *addrinfo;
-    gai := getaddrinfo(host_cstr, PORT, *hints, *addrs);
+    gai := getaddrinfo(host_cstr, GEMINI_PORT, *hints, *addrs);
     if (gai != 0) {
         print("Could not get address of `%`: %\n", host_cstr, gai_strerror(gai));
         exit(1);
@@ -75,7 +75,7 @@ main :: () {
 
     if sd == -1 {
         _, description := get_error_value_and_string();
-        print("Could not find suitable address for %:%\n", host, PORT);
+        print("Could not find suitable address for %:%\n", host, GEMINI_PORT);
         exit(1);
     }
 
@@ -89,7 +89,7 @@ main :: () {
         ssl_print_errors();
         exit(1);
     }
-    // defer SSL_CTX_free(ctx);
+    defer SSL_CTX_free(ctx);
 
     ssl := SSL_new(ctx);
     if ssl == null {
@@ -98,10 +98,19 @@ main :: () {
     }
     defer SSL_free(ssl);
 
-    SSL_set_fd(ssl, sd);
-    if (SSL_connect(ssl) < 0) {
+    if SSL_set_fd(ssl, sd) <= 0 {
         ssl_print_errors();
         exit(1);
+    }
+
+    if SSL_connect(ssl) <= 0 {
+        ssl_print_errors();
+        exit(1);
+    }
+
+    defer {
+        SSL_set_shutdown(ssl, SSL_RECEIVED_SHUTDOWN | SSL_SENT_SHUTDOWN);
+        SSL_shutdown(ssl);
     }
 
     sb : String_Builder;
@@ -120,9 +129,4 @@ main :: () {
         print("%", s);
         n = SSL_read(ssl, buffer.data, buffer.count);
     }
-
-    // defer {
-    //     SSL_set_shutdown(ssl, SSL_RECEIVED_SHUTDOWN | SSL_SENT_SHUTDOWN);
-    //     SSL_shutdown(ssl);
-    // }
 }
