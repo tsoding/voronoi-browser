@@ -25,15 +25,6 @@ SSL_CTX :: struct {};
 SSL_CTX_new :: (meth: *SSL_METHOD) -> *SSL_CTX #foreign libssl;
 SSL_CTX_free :: (ctx: *SSL_CTX) #foreign libssl;
 
-ssl_print_errors :: () {
-    while true {
-        err := ERR_get_error();
-        if err <= 0 break;
-
-        print("ssl_error: %\n", to_string(ERR_error_string(err, null)));
-    }
-}
-
 SSL_SENT_SHUTDOWN :: 1;
 SSL_RECEIVED_SHUTDOWN :: 2;
 
