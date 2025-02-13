@@ -165,9 +165,9 @@ main :: () {
     if !ok then exit(1);
     response_lines := split(response, "\n");
 
-    WINDOW_WIDTH :: 1600;
-    WINDOW_HEIGHT :: 900;
-    the_window := create_window(WINDOW_WIDTH, WINDOW_HEIGHT, "Voronoi");
+    window_width  := 1600;
+    window_height := 900;
+    the_window := create_window(window_width, window_height, "Voronoi");
 
     font_size := 48;
     line_padding := 10;
@@ -181,6 +181,10 @@ main :: () {
         update_window_events();
         for get_window_resizes() {
             Simp.update_window(the_window);
+            if it.window == the_window {
+                window_width  = it.width;
+                window_height = it.height;
+            }
         }
         for events_this_frame {
             if it.type == .QUIT then quit = true;
