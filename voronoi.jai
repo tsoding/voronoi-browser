@@ -12,6 +12,7 @@ Simp :: #import "Simp";
 #import "OpenSSL";
 
 GEMINI_PORT :: "1965";
+BACKGROUND_COLOR :: Vector4.{0x18/255., 0x18/255., 0x18/255., 1}
 
 shift :: (xs: *[]$T) -> T #expand {
     assert(xs.count > 0);
@@ -191,7 +192,10 @@ main :: () {
         mouse_x, mouse_y := get_mouse_pointer_position();
 
         Simp.set_render_target(the_window, .LEFT_HANDED);
-        Simp.clear_render_target(0x18/255., 0x18/255., 0x18/255., 1);
+        {
+            using BACKGROUND_COLOR;
+            Simp.clear_render_target(x, y, z, w);
+        }
         
         text_x := line_padding;
         text_y := font_size + line_padding;
@@ -234,3 +238,5 @@ main :: () {
         reset_temporary_storage();
     }
 }
+
+// TODO: cool background from https://github.com/tsoding/voronoi-opengl
