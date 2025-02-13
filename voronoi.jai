@@ -149,6 +149,24 @@ page_pools_next_allocator :: () -> Allocator {
     return page_allocator;
 }
 
+Page :: struct {
+    allocator: Allocator;
+    text: string;
+    text_lines: []string;
+    url: string;
+}
+
+page_query :: (page: *Page, ctx: *SSL_CTX, url: string) -> (ok: bool) {
+    // TODO: since we round robin between several pools we can't have more then one Page instance
+    page.allocator = page_pools_next_allocator();
+    page.url = copy_string(url,, allocator = page.allocator);
+    response, ok := make_gemini_query(ctx, url,, allocator = page.allocator);
+    if !ok return false;
+    page.text = response;
+    page.text_lines = split(page.text, "\n",, allocator = page.allocator);
+    return true;
+}
+
 main :: () {
     path := path_strip_filename(get_path_of_running_executable());
     set_working_directory(path);
@@ -161,7 +179,7 @@ main :: () {
         print("ERROR: expected gemini URL\n");
         exit(1);
     }
-    url := shift(*args);
+    url_from_command_line_arguments := shift(*args);
 
     OpenSSL_add_all_algorithms();
     SSL_load_error_strings();
@@ -173,10 +191,8 @@ main :: () {
     }
     defer SSL_CTX_free(ctx);
 
-    page_allocator := page_pools_next_allocator();
-    response, ok := make_gemini_query(ctx, url,, allocator = page_allocator);
-    if !ok then exit(1);
-    response_lines := split(response, "\n",, allocator = page_allocator);
+    page: Page;
+    if !page_query(*page, ctx, url_from_command_line_arguments) then exit(1);
 
     window_width  := 1600;
     window_height := 900;
@@ -221,7 +237,7 @@ main :: () {
         // TODO: vertical scroll
         // TODO: horizontal scroll
         // TODO: cool background from https://github.com/tsoding/voronoi-opengl
-        for line: response_lines {
+        for line: page.text_lines {
             text_width := Simp.prepare_text(font, line);
             color := Vector4.{1, 1, 1, 1};
             link_prefix :: "=> ";
@@ -234,20 +250,13 @@ main :: () {
                         link.count -= link_prefix.count;
                         _, link = split_from_left_by_any(link, " \t");
                         if begins_with(link, "gemini://") {
-                            page_allocator = page_pools_next_allocator();
-                            url = copy_string(link,, allocator = page_allocator);
-                            response, ok = make_gemini_query(ctx, url,, allocator = page_allocator);
-                            if !ok then exit(1); // TODO: we should probably not exit on errors here
-                            response_lines = split(response, "\n",, allocator = page_allocator);
+                            url := link;
+                            if !page_query(*page, ctx, url) then exit(1);   // TODO: we should probably not exit on errors here
                         } else if begins_with(link, "https://") {
                             log("TODO: implement opening Web links in the default browser");
                         } else {
-                            page_allocator = page_pools_next_allocator();
-                            // TODO: smarter handling of relative links
-                            url = join(url, link,, allocator = page_allocator);
-                            response, ok = make_gemini_query(ctx, url,, allocator = page_allocator);
-                            if !ok then exit(1); // TODO: we should probably not exit on errors here
-                            response_lines = split(response, "\n",, allocator = page_allocator);
+                            url := join(page.url, link,, allocator = temp); // TODO: better handling of relative links
+                            if !page_query(*page, ctx, url) then exit(1);   // TODO: we should probably not exit on errors here
                         }
                     }
                 }
