@@ -3,6 +3,11 @@
 #import "System";
 #import "POSIX";
 #import "String";
+#import "Math";
+
+#import "Window_Creation";
+#import "Input";
+Simp :: #import "Simp";
 
 #import "OpenSSL";
 
@@ -38,9 +43,10 @@ extract_host_from_gemini_url :: (url: string) -> (host: string, ok: bool) {
     return host, true;
 }
 
-make_gemini_query_and_print_response :: (ctx: *SSL_CTX, url: string) -> (ok: bool) {
+make_gemini_query :: (ctx: *SSL_CTX, url: string) -> (response: string, ok: bool) {
+    log("Querying url %", url);
     host, ok := extract_host_from_gemini_url(url);
-    if !ok return false;
+    if !ok return "", false;
 
     hints := addrinfo.{
         ai_family   = AF_INET,
@@ -52,7 +58,7 @@ make_gemini_query_and_print_response :: (ctx: *SSL_CTX, url: string) -> (ok: boo
     gai := getaddrinfo(to_c_string(host,, allocator=temp), GEMINI_PORT, *hints, *addrs);
     if (gai != 0) {
         log_error("Could not get address of `%`: %\n", host, to_string(gai_strerror(gai)));
-        return false;
+        return "", false;
     }
     defer freeaddrinfo(addrs);
 
@@ -64,7 +70,7 @@ make_gemini_query_and_print_response :: (ctx: *SSL_CTX, url: string) -> (ok: boo
         if sd == -1 {
             _, description := get_error_value_and_string();
             log_error("Could not create socket: %", description);
-            return false;
+            return "", false;
         }
         if connect(sd, addr.ai_addr, addr.ai_addrlen) == 0 break;
 
@@ -77,7 +83,7 @@ make_gemini_query_and_print_response :: (ctx: *SSL_CTX, url: string) -> (ok: boo
     if sd == -1 {
         _, description := get_error_value_and_string();
         log_error("Could not find suitable address for %:%\n", host, GEMINI_PORT);
-        return false;
+        return "", false;
     }
     defer close(sd);
 
@@ -86,18 +92,18 @@ make_gemini_query_and_print_response :: (ctx: *SSL_CTX, url: string) -> (ok: boo
     ssl := SSL_new(ctx);
     if ssl == null {
         ssl_log_errors();
-        return false;
+        return "", false;
     }
     defer SSL_free(ssl);
 
     if SSL_set_fd(ssl, sd) <= 0 {
         ssl_log_errors();
-        return false;
+        return "", false;
     }
 
     if SSL_connect(ssl) <= 0 {
         ssl_log_errors();
-        return false;
+        return "", false;
     }
 
     defer {
@@ -112,28 +118,28 @@ make_gemini_query_and_print_response :: (ctx: *SSL_CTX, url: string) -> (ok: boo
 
     if SSL_write(ssl, request.data, xx request.count) <= 0 {
         ssl_log_errors();
-        return false;
+        return "", false;
     }
 
     buffer: [1024]u8;
     n := SSL_read(ssl, buffer.data, buffer.count);
     while n > 0 {
-        s : string = ---;
-        s.data = buffer.data;
-        s.count = n;
-        print("%", s);
+        append(*sb, buffer.data, n);
         n = SSL_read(ssl, buffer.data, buffer.count);
     }
 
     if n < 0 {
         ssl_log_errors();
-        return false;
+        return "", false;
     }
 
-    return true;
+    return builder_to_string(*sb), true;
 }
 
 main :: () {
+    path := path_strip_filename(get_path_of_running_executable());
+    set_working_directory(path);
+
     args := get_command_line_arguments();
     program_name := shift(*args);
 
@@ -154,5 +160,77 @@ main :: () {
     }
     defer SSL_CTX_free(ctx);
 
-    if !make_gemini_query_and_print_response(ctx, url) then exit(1);
+    response, ok := make_gemini_query(ctx, url);
+    if !ok then exit(1);
+    response_lines := split(response, "\n");
+
+    WINDOW_WIDTH :: 1600;
+    WINDOW_HEIGHT :: 900;
+    the_window := create_window(WINDOW_WIDTH, WINDOW_HEIGHT, "Voronoi");
+
+    font_size := 48;
+    line_padding := 10;
+    font := Simp.get_font_at_size(".", "./resources/Alegreya-Regular.ttf", font_size);
+    assert(font != null);
+
+    quit := false;
+    while !quit {
+        click := false;
+
+        update_window_events();
+        for get_window_resizes() {
+            Simp.update_window(the_window);
+        }
+        for events_this_frame {
+            if it.type == .QUIT then quit = true;
+            if it.type == .KEYBOARD && it.key_code == .MOUSE_BUTTON_LEFT && !it.key_pressed {
+                click = true;
+            }
+        }
+
+        mouse_x, mouse_y := get_mouse_pointer_position();
+
+        Simp.set_render_target(the_window, .LEFT_HANDED);
+        Simp.clear_render_target(0x18/255., 0x18/255., 0x18/255., 1);
+        
+        text_x := line_padding;
+        text_y := font_size + line_padding;
+        for line: response_lines {
+            text_width := Simp.prepare_text(font, line);
+            color := Vector4.{1, 1, 1, 1};
+            link_prefix :: "=> ";
+            if begins_with(line, link_prefix) {
+                if text_y - font_size <= mouse_y && mouse_y <= text_y {
+                    color = .{1, 0, 0, 1};
+                    if click {
+                        link := line;
+                        link.data  += link_prefix.count;
+                        link.count -= link_prefix.count;
+                        _, link = split_from_left_by_any(link, " \t");
+                        if begins_with(link, "gemini://") {
+                            // TODO: absolute gemini links
+                            url = link;
+                            response, ok = make_gemini_query(ctx, url);
+                            if !ok then exit(1); // TODO: we should probably not exit on errors here
+                            response_lines = split(response, "\n");
+                        } else if begins_with(link, "https://") {
+                            log("TODO: implement opening Web links in the default browser");
+                        } else {
+                            url = join(url, link); // TODO: address the memory leak
+                            response, ok = make_gemini_query(ctx, url);
+                            if !ok then exit(1); // TODO: we should probably not exit on errors here
+                            response_lines = split(response, "\n");
+                        }
+                    }
+                }
+            }
+            Simp.draw_prepared_text(font, text_x, text_y, color);
+            text_y += font_size + line_padding;
+        }
+
+        Simp.swap_buffers(the_window);
+
+        sleep_milliseconds(10);
+        reset_temporary_storage();
+    }
 }
