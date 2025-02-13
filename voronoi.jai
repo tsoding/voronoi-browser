@@ -12,7 +12,7 @@ Simp :: #import "Simp";
 #import "OpenSSL";
 
 GEMINI_PORT :: "1965";
-BACKGROUND_COLOR :: Vector4.{0x18/255., 0x18/255., 0x18/255., 1}
+BACKGROUND_COLOR :: Vector4.{0x18/255., 0x18/255., 0x18/255., 1};
 
 shift :: (xs: *[]$T) -> T #expand {
     assert(xs.count > 0);
