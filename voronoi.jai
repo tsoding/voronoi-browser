@@ -4,6 +4,7 @@
 #import "POSIX";
 #import "String";
 #import "Math";
+#import "Flat_Pool";
 
 #import "Window_Creation";
 #import "Input";
@@ -56,7 +57,7 @@ make_gemini_query :: (ctx: *SSL_CTX, url: string) -> (response: string, ok: bool
     };
 
     addrs: *addrinfo;
-    gai := getaddrinfo(to_c_string(host,, allocator=temp), GEMINI_PORT, *hints, *addrs);
+    gai := getaddrinfo(to_c_string(host), GEMINI_PORT, *hints, *addrs);
     if (gai != 0) {
         log_error("Could not get address of `%`: %\n", host, to_string(gai_strerror(gai)));
         return "", false;
@@ -137,6 +138,17 @@ make_gemini_query :: (ctx: *SSL_CTX, url: string) -> (response: string, ok: bool
     return builder_to_string(*sb), true;
 }
 
+page_pools         :  [2]Flat_Pool;
+page_pools_current := 0;
+page_pools_next_allocator :: () -> Allocator {
+    page_pool := *page_pools[(page_pools_current+1)%page_pools.count];
+    reset(page_pool);
+    page_allocator: Allocator;
+    page_allocator.proc = flat_pool_allocator_proc;
+    page_allocator.data = page_pool;
+    return page_allocator;
+}
+
 main :: () {
     path := path_strip_filename(get_path_of_running_executable());
     set_working_directory(path);
@@ -161,9 +173,10 @@ main :: () {
     }
     defer SSL_CTX_free(ctx);
 
-    response, ok := make_gemini_query(ctx, url);
+    page_allocator := page_pools_next_allocator();
+    response, ok := make_gemini_query(ctx, url,, allocator = page_allocator);
     if !ok then exit(1);
-    response_lines := split(response, "\n");
+    response_lines := split(response, "\n",, allocator = page_allocator);
 
     window_width  := 1600;
     window_height := 900;
@@ -203,6 +216,11 @@ main :: () {
         
         text_x := line_padding;
         text_y := font_size + line_padding;
+        // TODO: don't draw lines out side of the screen
+        // TODO: word wrapping
+        // TODO: vertical scroll
+        // TODO: horizontal scroll
+        // TODO: cool background from https://github.com/tsoding/voronoi-opengl
         for line: response_lines {
             text_width := Simp.prepare_text(font, line);
             color := Vector4.{1, 1, 1, 1};
@@ -216,18 +234,20 @@ main :: () {
                         link.count -= link_prefix.count;
                         _, link = split_from_left_by_any(link, " \t");
                         if begins_with(link, "gemini://") {
-                            // TODO: absolute gemini links
-                            url = link;
-                            response, ok = make_gemini_query(ctx, url);
+                            page_allocator = page_pools_next_allocator();
+                            url = copy_string(link,, allocator = page_allocator);
+                            response, ok = make_gemini_query(ctx, url,, allocator = page_allocator);
                             if !ok then exit(1); // TODO: we should probably not exit on errors here
-                            response_lines = split(response, "\n");
+                            response_lines = split(response, "\n",, allocator = page_allocator);
                         } else if begins_with(link, "https://") {
                             log("TODO: implement opening Web links in the default browser");
                         } else {
-                            url = join(url, link); // TODO: address the memory leak
-                            response, ok = make_gemini_query(ctx, url);
+                            page_allocator = page_pools_next_allocator();
+                            // TODO: smarter handling of relative links
+                            url = join(url, link,, allocator = page_allocator);
+                            response, ok = make_gemini_query(ctx, url,, allocator = page_allocator);
                             if !ok then exit(1); // TODO: we should probably not exit on errors here
-                            response_lines = split(response, "\n");
+                            response_lines = split(response, "\n",, allocator = page_allocator);
                         }
                     }
                 }
@@ -242,5 +262,3 @@ main :: () {
         reset_temporary_storage();
     }
 }
-
-// TODO: cool background from https://github.com/tsoding/voronoi-opengl
