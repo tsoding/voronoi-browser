@@ -79,6 +79,7 @@ make_gemini_query_and_print_response :: (url: string) -> (ok: bool) {
         log_error("Could not find suitable address for %:%\n", host, GEMINI_PORT);
         return false;
     }
+    defer close(sd);
 
     log("Created connection to %", to_string(addr.ai_addr.(*sockaddr_in)));
 
