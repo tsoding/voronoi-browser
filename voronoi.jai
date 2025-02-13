@@ -38,7 +38,7 @@ extract_host_from_gemini_url :: (url: string) -> (host: string, ok: bool) {
     return host, true;
 }
 
-make_gemini_query_and_print_response :: (url: string) -> (ok: bool) {
+make_gemini_query_and_print_response :: (ctx: *SSL_CTX, url: string) -> (ok: bool) {
     host, ok := extract_host_from_gemini_url(url);
     if !ok return false;
 
@@ -82,16 +82,6 @@ make_gemini_query_and_print_response :: (url: string) -> (ok: bool) {
     defer close(sd);
 
     log("Created connection to %", to_string(addr.ai_addr.(*sockaddr_in)));
-
-    OpenSSL_add_all_algorithms();
-    SSL_load_error_strings();
-
-    ctx := SSL_CTX_new(TLS_client_method());
-    if ctx == null {
-        ssl_log_errors();
-        return false;
-    }
-    defer SSL_CTX_free(ctx);
 
     ssl := SSL_new(ctx);
     if ssl == null {
@@ -154,5 +144,15 @@ main :: () {
     }
     url := shift(*args);
 
-    if !make_gemini_query_and_print_response(url) then exit(1);
+    OpenSSL_add_all_algorithms();
+    SSL_load_error_strings();
+
+    ctx := SSL_CTX_new(TLS_client_method());
+    if ctx == null {
+        ssl_log_errors();
+        exit(1);
+    }
+    defer SSL_CTX_free(ctx);
+
+    if !make_gemini_query_and_print_response(ctx, url) then exit(1);
 }
