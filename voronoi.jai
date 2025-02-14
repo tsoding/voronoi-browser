@@ -232,12 +232,12 @@ main :: () {
         
         text_x := line_padding;
         text_y := font_size + line_padding;
-        // TODO: don't draw lines out side of the screen
         // TODO: word wrapping
         // TODO: vertical scroll
         // TODO: horizontal scroll
         // TODO: cool background from https://github.com/tsoding/voronoi-opengl
         for line: page.text_lines {
+            if text_y > window_height + font_size break;
             text_width := Simp.prepare_text(font, line);
             color := Vector4.{1, 1, 1, 1};
             link_prefix :: "=> ";
