@@ -240,14 +240,15 @@ main :: () {
             if text_y > window_height + font_size break;
             text_width := Simp.prepare_text(font, line);
             color := Vector4.{1, 1, 1, 1};
-            link_prefix :: "=> ";
+            link_prefix :: "=>";
             if begins_with(line, link_prefix) {
                 if text_y - font_size <= mouse_y && mouse_y <= text_y {
                     color = .{1, 0, 0, 1};
                     if click {
-                        link := line;
+                        link       := line;
                         link.data  += link_prefix.count;
                         link.count -= link_prefix.count;
+                        link        = trim_left(link);
                         _, link = split_from_left_by_any(link, " \t");
                         if begins_with(link, "gemini://") {
                             url := link;
