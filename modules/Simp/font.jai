@@ -20,9 +20,6 @@ Is FT_Face_Internal by value? If so, how big is it?? (Do we care?)
 
 get_kerning is broken (it breaks font rendering for KarminaBold at least).
 
-isLegalUTF8 does not work.
-
-
 @Cleanup:
 Note that Unicode.jai has a bunch of utf8 stuff in there so we should probably
 deduplicate to that.
@@ -37,50 +34,6 @@ glyph_id_to_hash_key :: (x: u32) -> int {
 isdigit :: (utf32: u32) -> bool {
     return (utf32 >= #char "0") && (utf32 <= #char "9");
 }
-
-
-isLegalUTF8 :: (source: *u8, length: s64) -> bool {
-    if length == 0 return false;
-    if length >  4  return false;
-
-	srcptr := source+length;
-
-    if length >= 4 {
-        a := <<srcptr;
-        srcptr -= 1;
-        if a < 0x80 return false;
-        if a > 0xBF return false;
-    }
-
-    if length >= 3 {
-        a := <<srcptr;
-        srcptr -= 1;
-        if a < 0x80 return false;
-        if a > 0xBF return false;
-    }
-
-    if length >= 2 {
-        a := << srcptr;
-        srcptr -= 1;
-        if a > 0xBF return false;
-
-        if << source == 0xE0 {
-            if a < 0xA0 return false;
-        } else if << source == 0xF0 {
-            if a < 0x90 return false;
-        } else if << source == 0xF4 {
-            if a > 0x8F return false;
-        } else {
-            if a < 0x80 return false;
-        }
-    }
-
-    if (<< source >= 0x80) && (<< source <= 0xC2) return false;
-    if << source > 0xF4 return false;
-
-    return true;
-}
-
 
 Font_Effects :: enum_flags u32 {
     SMALLCAPS      :: 0x1;
