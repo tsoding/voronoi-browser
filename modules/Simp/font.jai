@@ -308,27 +308,6 @@ ensure_fonts_are_initted :: () {
     if !fonts_initted init_fonts();
 }
 
-// @Refactor: Factor this together with add_glyph_to_temporaries?
-get_character_width_in_pixels :: (using font: *Dynamic_Font, utf8: *u8, effect_flags: Font_Effects) -> u32 {
-    glyph := find_or_create_glyph_utf8(font, utf8);
-    if !glyph return 0;
-
-    array_reset(*font.temporary_glyphs);
-    array_reset(*font.temporary_glyphs_byte_offsets);
-    assert(font.temporary_glyphs.count == font.temporary_glyphs_byte_offsets.count);
-
-    assert(glyph != null);
-
-    array_add(*font.temporary_glyphs, glyph);
-    array_add(*font.temporary_glyphs_byte_offsets, -1);
-    assert(font.temporary_glyphs.count == font.temporary_glyphs_byte_offsets.count);
-
-    if effect_flags do_glyph_substitutions(font, effect_flags);
-
-    return cast(u32) font.temporary_glyphs[0].advance;
-}
-
-
 accumulate_glyphs_from_font :: (source: *Dynamic_Font, dest: *Dynamic_Font) {
     for source.temporary_glyphs {
         array_add(*dest.temporary_glyphs, it);
@@ -353,12 +332,9 @@ convert_to_temporary_glyphs :: (using font: *Dynamic_Font, s: string, effect_fla
     all_latin := true;
     if !original_string.data  all_latin = false;  // Don't bother xreffing to latin font if the string is empty.
 
-    t := s.data;
-    while t < s.data + s.count {
-        t_str: string;
-        t_str.data = t;
-        t_str.count = 1;
-        utf32 := one_utf32_char(t);
+    t := s;
+    while t.count > 0 {
+        utf32, len := character_utf8_to_utf32(t.data, t.count);
 
         latin := is_latin(utf32);
 
@@ -366,37 +342,8 @@ convert_to_temporary_glyphs :: (using font: *Dynamic_Font, s: string, effect_fla
 
         glyph: *Glyph_Data;
 
-        /* Temporarily disabled; re-enable when we want international support.
-           Update 4 August 2016: Acutally I did a heavy revamp of the C++ code for The Witness
-           to use Harfbuzz etc for international support. When we want to beef this up, we should
-           re-port that because it works pretty differently.  -jblow, 4 August 2016.
-
-        if (latin && use_other_font_for_latin_always) {
-            if (latin_font.num_temporary_glyphs) {
-                if utf32 == 32 {
-                    // If it's the space at the end of Latin characters, don't do it!
-                    // Umm, we don't try to look through multiple trailing spaces right now.
-                    char *t = (char *)unicode.next_character((UTF8s *)s);
-                    unsigned long next = one_utf32_char(t);
-                    if is_latin(next) use_latin_font_for_this_character = true;
-                } else {
-                    // We already have a run of Latin characters, so let's do it.
-                    use_latin_font_for_this_character = true;
-                }
-            } else {
-                // Can only start a run of Latin characters with alphanumerics or quotes, for now.
-                // The reason is that e.g. Chinese wants to use ? and ! in its own formatting.
-                if ((utf32 >= 'A') && (utf32 <= 'Z')) use_latin_font_for_this_character = 1;
-                if ((utf32 >= 'a') && (utf32 <= 'z')) use_latin_font_for_this_character = 1;
-                if ((utf32 >= '0') && (utf32 <= '9')) use_latin_font_for_this_character = 1;
-                if (utf32 == '\'') use_latin_font_for_this_character = 1;
-                if (utf32 == '\"') use_latin_font_for_this_character = 1;
-            }
-        }
-        */
-
         if use_latin_font_for_this_character {
-            glyph = find_or_create_glyph_utf8(latin_font, t);
+            glyph = find_or_create_glyph(latin_font, utf32);
             if glyph {
                 add_glyph_to_temporaries(latin_font, glyph);
             }
@@ -410,7 +357,7 @@ convert_to_temporary_glyphs :: (using font: *Dynamic_Font, s: string, effect_fla
             glyph = null;
         } else {
             if latin_font flush_my_latin_font(font, effect_flags);
-            glyph = find_or_create_glyph_utf8(font, t);
+            glyph = find_or_create_glyph(font, utf32);
         }
 
 
@@ -420,7 +367,8 @@ convert_to_temporary_glyphs :: (using font: *Dynamic_Font, s: string, effect_fla
             if !latin all_latin = false;
         }
 
-        t = unicode_next_character(t);
+        t.data  += len;
+        t.count -= len;
     }
 
     if latin_font && all_latin && !use_other_font_for_latin_always {
@@ -435,10 +383,10 @@ convert_to_temporary_glyphs :: (using font: *Dynamic_Font, s: string, effect_fla
         return;
     }
 
-    if effect_flags do_glyph_substitutions(font, effect_flags);
+    if effect_flags then do_glyph_substitutions(font, effect_flags);
 
     // If we had Latin characters at the end of e.g. Chinese, we need to flush.
-    if (latin_font) flush_my_latin_font(font, effect_flags);
+    if latin_font then flush_my_latin_font(font, effect_flags);
 }
 
 set_unknown_character :: (using font: *Dynamic_Font, utf32: u32) -> bool {
@@ -726,8 +674,6 @@ dynamic_fonts : [..] *Dynamic_Font;
 
 glyph_and_line_pool : Pool;
 
-DUMMY_SOURCE_LENGTH :: 1000;  // This is stupid.
-
 find_line_within_page :: (page: *Font_Page, width: int, height: int) -> *Font_Line {
     bitmap := page.bitmap_data;
 
@@ -901,16 +847,6 @@ find_or_create_glyph :: (using font: *Dynamic_Font,
 
 find_or_create_glyph :: (font: *Dynamic_Font, utf32: u32) -> *Glyph_Data {
     return find_or_create_glyph(font, utf32, 0, utf32);
-}
-
-one_utf32_char :: inline (s: *u8) -> u32 {
-    utf32 := character_utf8_to_utf32(s, DUMMY_SOURCE_LENGTH);  // @BufferLength @Robustness
-    return utf32;
-} @NoProfile
-
-find_or_create_glyph_utf8 :: (font: *Dynamic_Font, utf8: *u8) -> *Glyph_Data {  // XXX Overloading
-    utf32 := one_utf32_char(utf8);
-    return find_or_create_glyph(font, utf32);
 }
 
 prepare_for_kerning :: (using font: *Dynamic_Font) {
