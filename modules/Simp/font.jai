@@ -349,7 +349,6 @@ convert_to_temporary_glyphs :: (using font: *Dynamic_Font, s: string, effect_fla
     if !s return;
 
     original_string := s;
-    sum := 0;
 
     all_latin := true;
     if !original_string.data  all_latin = false;  // Don't bother xreffing to latin font if the string is empty.
@@ -1079,8 +1078,6 @@ flush_my_latin_font :: (font: *Dynamic_Font, effect_flags: Font_Effects) {
     accumulate_glyphs_from_font(latin_font, font);
     latin_font.temporary_glyphs.count = 0;
 }
-
-
 
 do_glyph_substitutions :: (using font : *Dynamic_Font, effect_flags: Font_Effects) {
     if effect_flags & .LINING_FIGURES {
