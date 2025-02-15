@@ -146,7 +146,6 @@ Dynamic_Font :: struct {
     feature_lining_numbers: *Font_Feature;
 
     temporary_glyphs: [..] *Glyph_Data;
-    temporary_glyphs_byte_offsets: [..] int;
     temporary_glyphs_width_in_pixels: s64;
 
     // draw_quads_proc := default_draw_quads_proc;
@@ -333,7 +332,6 @@ get_character_width_in_pixels :: (using font: *Dynamic_Font, utf8: *u8, effect_f
 accumulate_glyphs_from_font :: (source: *Dynamic_Font, dest: *Dynamic_Font) {
     for source.temporary_glyphs {
         array_add(*dest.temporary_glyphs, it);
-        array_add(*dest.temporary_glyphs_byte_offsets, -1);
     }
 }
 
@@ -341,11 +339,9 @@ convert_to_temporary_glyphs :: (using font: *Dynamic_Font, s: string, effect_fla
     glyph_conversion_failed = false;
 
     array_reset(*font.temporary_glyphs);
-    array_reset(*font.temporary_glyphs_byte_offsets);
 
     if latin_font {
         array_reset(*latin_font.temporary_glyphs);
-        array_reset(*latin_font.temporary_glyphs_byte_offsets);
     }
 
     temporary_glyphs_width_in_pixels = 0;
@@ -403,7 +399,7 @@ convert_to_temporary_glyphs :: (using font: *Dynamic_Font, s: string, effect_fla
         if use_latin_font_for_this_character {
             glyph = find_or_create_glyph_utf8(latin_font, t);
             if glyph {
-                add_glyph_to_temporaries(latin_font, glyph, t - s.data);
+                add_glyph_to_temporaries(latin_font, glyph);
             }
 
             // We put the glyph into the latin_font, then null it out so that
@@ -420,7 +416,7 @@ convert_to_temporary_glyphs :: (using font: *Dynamic_Font, s: string, effect_fla
 
 
         if glyph {
-            add_glyph_to_temporaries(font, glyph, t - s.data);
+            add_glyph_to_temporaries(font, glyph);
 
             if !latin all_latin = false;
         }
@@ -435,7 +431,6 @@ convert_to_temporary_glyphs :: (using font: *Dynamic_Font, s: string, effect_fla
 
         convert_to_temporary_glyphs(latin_font, original_string, effect_flags);
         temporary_glyphs.count = 0;
-        temporary_glyphs_byte_offsets.count = 0;
         flush_my_latin_font(font, effect_flags);
 
         return;
@@ -1057,15 +1052,10 @@ single_substitute :: (using font: *Dynamic_Font, feature: *Font_Feature,
     return orig;
 }
 
-// WRONG: It's not byte_offset, it's an index? Fix me!
-// ACTUALLY, temporary_glyphs_byte_offsets seems to be completely unused. Delete it?
-add_glyph_to_temporaries :: inline (font: *Dynamic_Font, glyph: *Glyph_Data, byte_offset: int) {
+add_glyph_to_temporaries :: inline (font: *Dynamic_Font, glyph: *Glyph_Data) {
     assert(glyph != null);
 
-    assert(font.temporary_glyphs.count == font.temporary_glyphs_byte_offsets.count);
     array_add(*font.temporary_glyphs, glyph);
-    array_add(*font.temporary_glyphs_byte_offsets, byte_offset);
-    assert(font.temporary_glyphs.count == font.temporary_glyphs_byte_offsets.count);
 
     font.temporary_glyphs_width_in_pixels += glyph.advance;
 
@@ -1088,7 +1078,6 @@ flush_my_latin_font :: (font: *Dynamic_Font, effect_flags: Font_Effects) {
     do_glyph_substitutions(latin_font, effect_flags);
     accumulate_glyphs_from_font(latin_font, font);
     latin_font.temporary_glyphs.count = 0;
-    latin_font.temporary_glyphs_byte_offsets.count = 0;
 }
 
 
