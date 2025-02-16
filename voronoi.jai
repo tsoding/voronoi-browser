@@ -138,33 +138,93 @@ make_gemini_query :: (ctx: *SSL_CTX, url: string) -> (response: string, ok: bool
     return builder_to_string(*sb), true;
 }
 
-page_pools         :  [2]Flat_Pool;
-page_pools_current := 0;
-page_pools_next_allocator :: () -> Allocator {
-    page_pool := *page_pools[(page_pools_current+1)%page_pools.count];
-    reset(page_pool);
-    page_allocator: Allocator;
-    page_allocator.proc = flat_pool_allocator_proc;
-    page_allocator.data = page_pool;
-    return page_allocator;
-}
-
 Page :: struct {
-    allocator: Allocator;
     text: string;
-    text_lines: []string;
     url: string;
 }
 
 page_query :: (page: *Page, ctx: *SSL_CTX, url: string) -> (ok: bool) {
-    // TODO: since we round robin between several pools we can't have more then one Page instance
-    page.allocator = page_pools_next_allocator();
-    page.url = copy_string(url,, allocator = page.allocator);
-    response, ok := make_gemini_query(ctx, url,, allocator = page.allocator);
+    free(page.text);
+    free(page.url);
+    page.url = copy_string(url);
+    response, ok := make_gemini_query(ctx, url);
     if !ok return false;
     page.text = response;
-    page.text_lines = split(page.text, "\n",, allocator = page.allocator);
     return true;
+}
+
+Page_Action :: struct {
+    type: enum {
+        NONE;
+        CLICK_LINK;
+    };
+    link: string;
+}
+
+font : *Simp.Dynamic_Font;
+mouse_click := false;
+mouse_x := 0;
+mouse_y := 0;
+window_width  := 1600;
+window_height := 900;
+font_size := 48;
+
+immediate_page :: (page: Page, font_size: int) -> (action: Page_Action) {
+    action: Page_Action;
+
+    line_padding := 10;
+    text_x := line_padding;
+    text_y := font_size + line_padding;
+    // TODO: vertical scroll
+    // TODO: horizontal scroll
+    for line: split(page.text, "\n",, allocator = temp) {
+        if text_y > window_height + font_size break;
+        link_prefix :: "=>";
+        color := Vector4.{1, 1, 1, 1};
+        if begins_with(line, link_prefix) {
+            if text_y - font_size <= mouse_y && mouse_y <= text_y {
+                color = .{1, 0, 0, 1};
+                if mouse_click {
+                    link       := line;
+                    link.data  += link_prefix.count;
+                    link.count -= link_prefix.count;
+                    link        = trim_left(link);
+                    _, link = split_from_left_by_any(link, " \t");
+                    if begins_with(link, "gemini://") {
+                        action = .{
+                            type = .CLICK_LINK,
+                            link = link,
+                        };
+                    } else if begins_with(link, "https://") {
+                        log("TODO: implement opening Web links in the default browser");
+                    } else {
+                        action = .{
+                            type = .CLICK_LINK,
+                            link = join(page.url, link,, allocator = temp),  // TODO: better handling of relative links
+                        };
+                    }
+                }
+            }
+        }
+        Simp.begin_prepare_text(font);
+        for split(line, " ",, allocator = temp) {
+            // TODO: word wrap overshoots a word
+            // We should probably introduce some sort of rollback for append_prepare_text
+            Simp.append_prepare_text(font, it);
+            Simp.append_prepare_text(font, " ");
+            if font.temporary_glyphs_width_in_pixels >= window_width {
+                Simp.end_prepare_text(font);
+                Simp.draw_prepared_text(font, text_x, text_y, color);
+                text_y += font_size + line_padding;
+                Simp.begin_prepare_text(font);
+            }
+        }
+        Simp.end_prepare_text(font);
+        Simp.draw_prepared_text(font, text_x, text_y, color);
+        text_y += font_size + line_padding;
+    }
+
+    return action;
 }
 
 main :: () {
@@ -194,18 +254,14 @@ main :: () {
     page: Page;
     if !page_query(*page, ctx, url_from_command_line_arguments) then exit(1);
 
-    window_width  := 1600;
-    window_height := 900;
     the_window := create_window(window_width, window_height, "Voronoi");
 
-    font_size := 48;
-    line_padding := 10;
-    font := Simp.get_font_at_size(".", "./resources/Alegreya-Regular.ttf", font_size);
+    font = Simp.get_font_at_size(".", "./resources/Alegreya-Regular.ttf", font_size);
     assert(font != null);
 
     quit := false;
     while !quit {
-        click := false;
+        mouse_click = false;
 
         update_window_events();
         for get_window_resizes() {
@@ -218,11 +274,11 @@ main :: () {
         for events_this_frame {
             if it.type == .QUIT then quit = true;
             if it.type == .KEYBOARD && it.key_code == .MOUSE_BUTTON_LEFT && !it.key_pressed {
-                click = true;
+                mouse_click = true;
             }
         }
 
-        mouse_x, mouse_y := get_mouse_pointer_position();
+        mouse_x, mouse_y = get_mouse_pointer_position();
 
         Simp.set_render_target(the_window, .LEFT_HANDED);
         {
@@ -230,40 +286,15 @@ main :: () {
             Simp.clear_render_target(x, y, z, w);
         }
         
-        text_x := line_padding;
-        text_y := font_size + line_padding;
-        // TODO: word wrapping
-        // TODO: vertical scroll
-        // TODO: horizontal scroll
-        // TODO: cool background from https://github.com/tsoding/voronoi-opengl
-        for line: page.text_lines {
-            if text_y > window_height + font_size break;
-            text_width := Simp.prepare_text(font, line);
-            color := Vector4.{1, 1, 1, 1};
-            link_prefix :: "=>";
-            if begins_with(line, link_prefix) {
-                if text_y - font_size <= mouse_y && mouse_y <= text_y {
-                    color = .{1, 0, 0, 1};
-                    if click {
-                        link       := line;
-                        link.data  += link_prefix.count;
-                        link.count -= link_prefix.count;
-                        link        = trim_left(link);
-                        _, link = split_from_left_by_any(link, " \t");
-                        if begins_with(link, "gemini://") {
-                            url := link;
-                            if !page_query(*page, ctx, url) then exit(1);   // TODO: we should probably not exit on errors here
-                        } else if begins_with(link, "https://") {
-                            log("TODO: implement opening Web links in the default browser");
-                        } else {
-                            url := join(page.url, link,, allocator = temp); // TODO: better handling of relative links
-                            if !page_query(*page, ctx, url) then exit(1);   // TODO: we should probably not exit on errors here
-                        }
-                    }
+        // TODO: render cool background from https://github.com/tsoding/voronoi-opengl
+        action := immediate_page(page, font_size);
+        if action.type == {
+            case .NONE;
+            case .CLICK_LINK;
+                if !page_query(*page, ctx, action.link) {
+                    exit(1); // TODO: we should probably not exit on errors like that
+                             //   Display some sort of error page instead
                 }
-            }
-            Simp.draw_prepared_text(font, text_x, text_y, color);
-            text_y += font_size + line_padding;
         }
 
         Simp.swap_buffers(the_window);

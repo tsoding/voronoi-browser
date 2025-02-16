@@ -66,7 +66,6 @@ Font_Quad :: struct {
 
 Dynamic_Font :: struct {
     name: string;
-    latin_font: *Dynamic_Font;
 
     glyph_lookup: Table(int, *Glyph_Data);
 
@@ -267,79 +266,48 @@ accumulate_glyphs_from_font :: (source: *Dynamic_Font, dest: *Dynamic_Font) {
     }
 }
 
+begin_prepare_text :: (using font: *Dynamic_Font) {
+    glyph_conversion_failed = false;
+    array_reset(*font.temporary_glyphs);
+    temporary_glyphs_width_in_pixels = 0;
+}
+
+append_prepare_text :: (font: *Dynamic_Font, s: string) {
+    if !s return;
+
+    t := s;
+    while t.count > 0 {
+        utf32, len := character_utf8_to_utf32(t.data, t.count);
+        glyph := find_or_create_glyph(font, utf32);
+        if glyph then add_glyph_to_temporaries(font, glyph);
+        t.data  += len;
+        t.count -= len;
+    }
+}
+
+end_prepare_text :: (font: *Dynamic_Font, effect_flags: Font_Effects = 0) {
+    if effect_flags then do_glyph_substitutions(font, effect_flags);
+}
+
 convert_to_temporary_glyphs :: (using font: *Dynamic_Font, s: string, effect_flags: Font_Effects) {  // XXX using
     glyph_conversion_failed = false;
 
     array_reset(*font.temporary_glyphs);
 
-    if latin_font {
-        array_reset(*latin_font.temporary_glyphs);
-    }
-
     temporary_glyphs_width_in_pixels = 0;
 
     if !s return;
 
-    original_string := s;
-
-    all_latin := true;
-    if !original_string.data  all_latin = false;  // Don't bother xreffing to latin font if the string is empty.
-
     t := s;
     while t.count > 0 {
         utf32, len := character_utf8_to_utf32(t.data, t.count);
-
-        latin := is_latin(utf32);
-
-        use_latin_font_for_this_character := false;
-
-        glyph: *Glyph_Data;
-
-        if use_latin_font_for_this_character {
-            glyph = find_or_create_glyph(latin_font, utf32);
-            if glyph {
-                add_glyph_to_temporaries(latin_font, glyph);
-            }
-
-            // We put the glyph into the latin_font, then null it out so that
-            // we don't put it into our own buffer.  The reason is that we want
-            // the Latin font to apply font effects / substitutions / etc by
-            // its own means, and then copy the results of that into our buffer.
-            // If we were to copy it now, it'd be too soon.
-
-            glyph = null;
-        } else {
-            if latin_font flush_my_latin_font(font, effect_flags);
-            glyph = find_or_create_glyph(font, utf32);
-        }
-
-
-        if glyph {
-            add_glyph_to_temporaries(font, glyph);
-
-            if !latin all_latin = false;
-        }
-
+        glyph := find_or_create_glyph(font, utf32);
+        if glyph then add_glyph_to_temporaries(font, glyph);
         t.data  += len;
         t.count -= len;
     }
 
-    if latin_font && all_latin && !use_other_font_for_latin_always {
-        //
-        // Whoops!  Instead, let's use the latin font's glyphs.
-        //
-
-        convert_to_temporary_glyphs(latin_font, original_string, effect_flags);
-        temporary_glyphs.count = 0;
-        flush_my_latin_font(font, effect_flags);
-
-        return;
-    }
-
     if effect_flags then do_glyph_substitutions(font, effect_flags);
-
-    // If we had Latin characters at the end of e.g. Chinese, we need to flush.
-    if latin_font then flush_my_latin_font(font, effect_flags);
 }
 
 set_unknown_character :: (using font: *Dynamic_Font, utf32: u32) -> bool {
@@ -953,19 +921,6 @@ add_glyph_to_temporaries :: inline (font: *Dynamic_Font, glyph: *Glyph_Data) {
     //
 
     if glyph.glyph_index_within_font == 0 font.glyph_conversion_failed = true;
-}
-
-flush_my_latin_font :: (font: *Dynamic_Font, effect_flags: Font_Effects) {
-    // Flush any latin characters in the Latin font back into the non-latin Font...
-
-    latin_font := font.latin_font;
-    assert(latin_font != null);
-
-    if !latin_font.temporary_glyphs.count return;
-
-    do_glyph_substitutions(latin_font, effect_flags);
-    accumulate_glyphs_from_font(latin_font, font);
-    latin_font.temporary_glyphs.count = 0;
 }
 
 do_glyph_substitutions :: (using font : *Dynamic_Font, effect_flags: Font_Effects) {
