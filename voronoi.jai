@@ -167,13 +167,16 @@ mouse_x := 0;
 mouse_y := 0;
 window_width  := 1600;
 window_height := 900;
-font_size := 48;
+max_content_width := 780;
+font_size := 28;
 
 immediate_page :: (page: Page, font_size: int) -> (action: Page_Action) {
     action: Page_Action;
 
+    content_width := min(max_content_width, window_width);
+
     line_padding := 10;
-    text_x := line_padding;
+    text_x := window_width/2 - content_width/2;
     text_y := font_size + line_padding;
     // TODO: vertical scroll
     // TODO: horizontal scroll
@@ -181,28 +184,27 @@ immediate_page :: (page: Page, font_size: int) -> (action: Page_Action) {
         if text_y > window_height + font_size break;
         link_prefix :: "=>";
         color := Vector4.{1, 1, 1, 1};
-        if begins_with(line, link_prefix) {
-            if text_y - font_size <= mouse_y && mouse_y <= text_y {
-                color = .{1, 0, 0, 1};
-                if mouse_click {
-                    link       := line;
-                    link.data  += link_prefix.count;
-                    link.count -= link_prefix.count;
-                    link        = trim_left(link);
-                    _, link = split_from_left_by_any(link, " \t");
-                    if begins_with(link, "gemini://") {
-                        action = .{
-                            type = .CLICK_LINK,
-                            link = link,
-                        };
-                    } else if begins_with(link, "https://") {
-                        log("TODO: implement opening Web links in the default browser");
-                    } else {
-                        action = .{
-                            type = .CLICK_LINK,
-                            link = join(page.url, link,, allocator = temp),  // TODO: better handling of relative links
-                        };
-                    }
+        // TODO: the hitbox of a link does not take into account word wrapping
+        if begins_with(line, link_prefix) && text_y - font_size <= mouse_y && mouse_y <= text_y {
+            color = .{1, 0, 0, 1};
+            if mouse_click {
+                link       := line;
+                link.data  += link_prefix.count;
+                link.count -= link_prefix.count;
+                link        = trim_left(link);
+                _, link = split_from_left_by_any(link, " \t");
+                if begins_with(link, "gemini://") {
+                    action = .{
+                        type = .CLICK_LINK,
+                        link = link,
+                    };
+                } else if begins_with(link, "https://") {
+                    log("TODO: implement opening Web links in the default browser");
+                } else {
+                    action = .{
+                        type = .CLICK_LINK,
+                        link = join(page.url, link,, allocator = temp),  // TODO: better handling of relative links
+                    };
                 }
             }
         }
@@ -212,7 +214,7 @@ immediate_page :: (page: Page, font_size: int) -> (action: Page_Action) {
             // We should probably introduce some sort of rollback for append_prepare_text
             Simp.append_prepare_text(font, it);
             Simp.append_prepare_text(font, " ");
-            if font.temporary_glyphs_width_in_pixels >= window_width {
+            if font.temporary_glyphs_width_in_pixels >= content_width {
                 Simp.end_prepare_text(font);
                 Simp.draw_prepared_text(font, text_x, text_y, color);
                 text_y += font_size + line_padding;

@@ -5,6 +5,8 @@ Simple Gemini browser
 > [!WARNING]
 > This software is unfinished. Keep your expectations low.
 
+![thumbnail](./thumbnail.png)
+
 ## Quick Start
 
 ```console
