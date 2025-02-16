@@ -171,26 +171,25 @@ mouse_y := 0;
 window_width  := 1600;
 window_height := 900;
 max_content_width := 780;
-font_size := 28;
 
-immediate_page :: (page: Page, font_size: int) -> (action: Page_Action, page_height: int) {
+immediate_page :: (page: Page) -> (action: Page_Action, page_height: int) {
     action: Page_Action;
 
     content_width := min(max_content_width, window_width);
 
     line_padding := 10;
     text_x := window_width/2 - content_width/2;
-    text_y := page.scroll_y + font_size + line_padding;
+    text_y := page.scroll_y + font.character_height + line_padding;
     // TODO: horizontal scroll
     //   Is it really needed if we are wrapping words?
     // TODO: smooth vertical scroll (scroll velocity)
     // TODO: vertical scroll bar
     for line: split(page.text, "\n",, allocator = temp) {
-        if text_y > window_height + font_size break;
+        if text_y > window_height + font.character_height break;
         link_prefix :: "=>";
         color := Vector4.{1, 1, 1, 1};
         // TODO: the hitbox of a link does not take into account word wrapping
-        if begins_with(line, link_prefix) && text_y - font_size <= mouse_y && mouse_y <= text_y {
+        if begins_with(line, link_prefix) && text_y - font.character_height <= mouse_y && mouse_y <= text_y {
             color = .{1, 0, 0, 1};
             if mouse_click {
                 link       := line;
@@ -222,13 +221,13 @@ immediate_page :: (page: Page, font_size: int) -> (action: Page_Action, page_hei
             if font.temporary_glyphs_width_in_pixels >= content_width {
                 Simp.end_prepare_text(font);
                 Simp.draw_prepared_text(font, text_x, text_y, color);
-                text_y += font_size + line_padding;
+                text_y += font.character_height + line_padding;
                 Simp.begin_prepare_text(font);
             }
         }
         Simp.end_prepare_text(font);
         Simp.draw_prepared_text(font, text_x, text_y, color);
-        text_y += font_size + line_padding;
+        text_y += font.character_height + line_padding;
     }
 
     return action, text_y;
@@ -263,6 +262,7 @@ main :: () {
 
     the_window := create_window(window_width, window_height, "Voronoi");
 
+    font_size :: 28;
     font = Simp.get_font_at_size(".", "./resources/Alegreya-Regular.ttf", font_size);
     assert(font != null);
 
@@ -308,7 +308,7 @@ main :: () {
         }
         
         // TODO: render cool background from https://github.com/tsoding/voronoi-opengl
-        action, page_height := immediate_page(page, font_size);
+        action, page_height := immediate_page(page);
         previous_frame_page_height = page_height;
         if action.type == {
             case .NONE;
