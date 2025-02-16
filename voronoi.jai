@@ -141,11 +141,14 @@ make_gemini_query :: (ctx: *SSL_CTX, url: string) -> (response: string, ok: bool
 Page :: struct {
     text: string;
     url: string;
+    scroll_y: int;
 }
 
 page_query :: (page: *Page, ctx: *SSL_CTX, url: string) -> (ok: bool) {
     free(page.text);
     free(page.url);
+    page.scroll_y = 0;
+
     page.url = copy_string(url);
     response, ok := make_gemini_query(ctx, url);
     if !ok return false;
@@ -170,16 +173,18 @@ window_height := 900;
 max_content_width := 780;
 font_size := 28;
 
-immediate_page :: (page: Page, font_size: int) -> (action: Page_Action) {
+immediate_page :: (page: Page, font_size: int) -> (action: Page_Action, page_height: int) {
     action: Page_Action;
 
     content_width := min(max_content_width, window_width);
 
     line_padding := 10;
     text_x := window_width/2 - content_width/2;
-    text_y := font_size + line_padding;
-    // TODO: vertical scroll
+    text_y := page.scroll_y + font_size + line_padding;
     // TODO: horizontal scroll
+    //   Is it really needed if we are wrapping words?
+    // TODO: smooth vertical scroll (scroll velocity)
+    // TODO: vertical scroll bar
     for line: split(page.text, "\n",, allocator = temp) {
         if text_y > window_height + font_size break;
         link_prefix :: "=>";
@@ -226,7 +231,7 @@ immediate_page :: (page: Page, font_size: int) -> (action: Page_Action) {
         text_y += font_size + line_padding;
     }
 
-    return action;
+    return action, text_y;
 }
 
 main :: () {
@@ -262,6 +267,7 @@ main :: () {
     assert(font != null);
 
     quit := false;
+    previous_frame_page_height := 0;
     while !quit {
         mouse_click = false;
 
@@ -274,9 +280,22 @@ main :: () {
             }
         }
         for events_this_frame {
-            if it.type == .QUIT then quit = true;
-            if it.type == .KEYBOARD && it.key_code == .MOUSE_BUTTON_LEFT && !it.key_pressed {
-                mouse_click = true;
+            if it.type == {
+                case .QUIT; quit = true;
+                case .KEYBOARD; if it.key_code == .MOUSE_BUTTON_LEFT && !it.key_pressed {
+                    mouse_click = true;
+                }
+                case .MOUSE_WHEEL; {
+                    SCROLL_DELTA :: 100;
+                    if it.wheel_delta < 0 {
+                        page.scroll_y -= SCROLL_DELTA;
+                    } else if it.wheel_delta > 0 {
+                        page.scroll_y += SCROLL_DELTA;
+                    }
+                    page.scroll_y = min(page.scroll_y, 0);
+                    // TODO: bottom scroll limit
+                }
+                case; print("%\n", it);
             }
         }
 
@@ -289,7 +308,8 @@ main :: () {
         }
         
         // TODO: render cool background from https://github.com/tsoding/voronoi-opengl
-        action := immediate_page(page, font_size);
+        action, page_height := immediate_page(page, font_size);
+        previous_frame_page_height = page_height;
         if action.type == {
             case .NONE;
             case .CLICK_LINK;
