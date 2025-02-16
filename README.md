@@ -10,6 +10,6 @@ Simple Gemini browser
 ```console
 $ jai -version
 Version: beta 0.2.009, built on 6 February 2025.
-$ jai voronoi.jai
+$ jai first.jai
 $ ./voronoi gemini://geminiprotocol.net/
 ```
