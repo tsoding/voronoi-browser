@@ -293,6 +293,7 @@ main :: () {
         if action.type == {
             case .NONE;
             case .CLICK_LINK;
+                // TODO: make queries without blocking UI
                 if !page_query(*page, ctx, action.link) {
                     exit(1); // TODO: we should probably not exit on errors like that
                              //   Display some sort of error page instead
