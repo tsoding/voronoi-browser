@@ -161,13 +161,14 @@ start_query_thread :: () {
 
             lock(*page_mutex);
                 page.status = .LOADING;
+                url := copy_string(page.url,, allocator = temp);
             unlock(*page_mutex);
 
-            response, ok := make_gemini_query(ctx, page.url);
+            response, ok := make_gemini_query(ctx, url);
 
             lock(*page_mutex);
-                free(page.text);
                 page.scroll_y = 0;
+                free(page.text.data);
                 page.text.data = null;
                 page.text.count = 0;
                 if ok {
@@ -177,6 +178,8 @@ start_query_thread :: () {
                     page.status = .ERROR;
                 }
             unlock(*page_mutex);
+
+            reset_temporary_storage();
         }
 
         return 0;
@@ -317,9 +320,8 @@ main :: () {
     }
     defer SSL_CTX_free(ctx);
 
-    start_query_thread();
-
     page.url = url_from_command_line_arguments;
+    start_query_thread();
     signal(*query_semaphore);
 
     the_window := create_window(window_width, window_height, "Voronoi");
