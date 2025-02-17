@@ -5,6 +5,7 @@
 #import "String";
 #import "Math";
 #import "Flat_Pool";
+#import "Thread";
 
 #import "Window_Creation";
 #import "Input";
@@ -138,22 +139,50 @@ make_gemini_query :: (ctx: *SSL_CTX, url: string) -> (response: string, ok: bool
     return builder_to_string(*sb), true;
 }
 
+
 Page :: struct {
+    status : enum {
+        LOADING;
+        LOADED;
+        ERROR;
+    } = .LOADED;
+
     text: string;
     url: string;
     scroll_y: int;
 }
 
-page_query :: (page: *Page, ctx: *SSL_CTX, url: string) -> (ok: bool) {
-    free(page.text);
-    free(page.url);
-    page.scroll_y = 0;
+start_query_thread :: () {
+    init(*page_mutex);
+    init(*query_semaphore);
+    ok := thread_init(*query_thread, (thread: *Thread) -> s64 {
+        while true {
+            wait_for(*query_semaphore);
 
-    page.url = copy_string(url);
-    response, ok := make_gemini_query(ctx, url);
-    if !ok return false;
-    page.text = response;
-    return true;
+            lock(*page_mutex);
+                page.status = .LOADING;
+            unlock(*page_mutex);
+
+            response, ok := make_gemini_query(ctx, page.url);
+
+            lock(*page_mutex);
+                free(page.text);
+                page.scroll_y = 0;
+                page.text.data = null;
+                page.text.count = 0;
+                if ok {
+                    page.status = .LOADED;
+                    page.text = response;
+                } else {
+                    page.status = .ERROR;
+                }
+            unlock(*page_mutex);
+        }
+
+        return 0;
+    });
+    assert(ok);
+    thread_start(*query_thread);
 }
 
 Page_Action :: struct {
@@ -171,66 +200,97 @@ mouse_y := 0;
 window_width  := 1600;
 window_height := 900;
 max_content_width := 780;
+ctx: *SSL_CTX;
+page: Page;
+page_mutex: Mutex;
+query_thread: Thread;
+query_semaphore: Semaphore;
 
-immediate_page :: (page: Page) -> (action: Page_Action, page_height: int) {
+immediate_page :: (page: Page) -> (action: Page_Action) {
     action: Page_Action;
 
     content_width := min(max_content_width, window_width);
 
     line_padding := 10;
-    text_x := window_width/2 - content_width/2;
-    text_y := page.scroll_y + font.character_height + line_padding;
     // TODO: horizontal scroll
     //   Is it really needed if we are wrapping words?
     // TODO: smooth vertical scroll (scroll velocity)
     // TODO: vertical scroll bar
-    for line: split(page.text, "\n",, allocator = temp) {
-        if text_y > window_height + font.character_height break;
-        link_prefix :: "=>";
-        color := Vector4.{1, 1, 1, 1};
-        // TODO: the hitbox of a link does not take into account word wrapping
-        if begins_with(line, link_prefix) && text_y - font.character_height <= mouse_y && mouse_y <= text_y {
-            color = .{1, 0, 0, 1};
-            if mouse_click {
-                link       := line;
-                link.data  += link_prefix.count;
-                link.count -= link_prefix.count;
-                link        = trim_left(link);
-                _, link = split_from_left_by_any(link, " \t");
-                if begins_with(link, "gemini://") {
-                    action = .{
-                        type = .CLICK_LINK,
-                        link = link,
-                    };
-                } else if begins_with(link, "https://") {
-                    log("TODO: implement opening Web links in the default browser");
-                } else {
-                    action = .{
-                        type = .CLICK_LINK,
-                        link = join(page.url, link,, allocator = temp),  // TODO: better handling of relative links
-                    };
-                }
+    if page.status == {
+        case .ERROR;
+            text_x := window_width/2 - content_width/2;
+            text_y := font.character_height + line_padding;
+            Simp.prepare_text(font, "ERROR");
+            Simp.draw_prepared_text(font, text_x, text_y);
+        case .LOADING;
+            Simp.set_shader_for_color();
+            SPINNER_SIZE :: 50;
+            SPINNER_COLOR :: Vector4.{1, 1, 1, 1};
+            SPINNER_PADDING :: 30;
+            // cx := SPINNER_SIZE + SPINNER_PADDING;
+            // cy := window_height - (SPINNER_SIZE + SPINNER_PADDING);
+            cx := window_width/2;
+            cy := window_height/2;
+            ps : [4]Vector2;
+            a  : float = xx seconds_since_init()*4.0;
+            for *ps {
+                it.x = cx + cos(a)*SPINNER_SIZE;
+                it.y = cy + sin(a)*SPINNER_SIZE;
+                a += PI/2.0;
             }
-        }
-        Simp.begin_prepare_text(font);
-        for split(line, " ",, allocator = temp) {
-            // TODO: word wrap overshoots a word
-            // We should probably introduce some sort of rollback for append_prepare_text
-            Simp.append_prepare_text(font, it);
-            Simp.append_prepare_text(font, " ");
-            if font.temporary_glyphs_width_in_pixels >= content_width {
+            Simp.immediate_quad(ps[0], ps[1], ps[2], ps[3], SPINNER_COLOR);
+            #through;
+        case .LOADED;
+            text_x := window_width/2 - content_width/2;
+            text_y := page.scroll_y + font.character_height + line_padding;
+            for line: split(page.text, "\n",, allocator = temp) {
+                if text_y > window_height + font.character_height break;
+                link_prefix :: "=>";
+                color := Vector4.{1, 1, 1, 1};
+                // TODO: the hitbox of a link does not take into account word wrapping
+                if begins_with(line, link_prefix) && text_y - font.character_height <= mouse_y && mouse_y <= text_y {
+                    color = .{1, 0, 0, 1};
+                    if mouse_click {
+                        link       := line;
+                        link.data  += link_prefix.count;
+                        link.count -= link_prefix.count;
+                        link        = trim_left(link);
+                        _, link = split_from_left_by_any(link, " \t");
+                        if begins_with(link, "gemini://") {
+                            action = .{
+                                type = .CLICK_LINK,
+                                link = link,
+                            };
+                        } else if begins_with(link, "https://") {
+                            log("TODO: implement opening Web links in the default browser");
+                        } else {
+                            action = .{
+                                type = .CLICK_LINK,
+                                link = join(page.url, link,, allocator = temp),  // TODO: better handling of relative links
+                            };
+                        }
+                    }
+                }
+                Simp.begin_prepare_text(font);
+                for split(line, " ",, allocator = temp) {
+                    // TODO: word wrap overshoots a word
+                    // We should probably introduce some sort of rollback for append_prepare_text
+                    Simp.append_prepare_text(font, it);
+                    Simp.append_prepare_text(font, " ");
+                    if font.temporary_glyphs_width_in_pixels >= content_width {
+                        Simp.end_prepare_text(font);
+                        Simp.draw_prepared_text(font, text_x, text_y, color);
+                        text_y += font.character_height + line_padding;
+                        Simp.begin_prepare_text(font);
+                    }
+                }
                 Simp.end_prepare_text(font);
                 Simp.draw_prepared_text(font, text_x, text_y, color);
                 text_y += font.character_height + line_padding;
-                Simp.begin_prepare_text(font);
             }
-        }
-        Simp.end_prepare_text(font);
-        Simp.draw_prepared_text(font, text_x, text_y, color);
-        text_y += font.character_height + line_padding;
     }
 
-    return action, text_y;
+    return action;
 }
 
 main :: () {
@@ -245,20 +305,22 @@ main :: () {
         print("ERROR: expected gemini URL\n");
         exit(1);
     }
-    url_from_command_line_arguments := shift(*args);
+    url_from_command_line_arguments := copy_string(shift(*args));
 
     OpenSSL_add_all_algorithms();
     SSL_load_error_strings();
 
-    ctx := SSL_CTX_new(TLS_client_method());
+    ctx = SSL_CTX_new(TLS_client_method());
     if ctx == null {
         ssl_log_errors();
         exit(1);
     }
     defer SSL_CTX_free(ctx);
 
-    page: Page;
-    if !page_query(*page, ctx, url_from_command_line_arguments) then exit(1);
+    start_query_thread();
+
+    page.url = url_from_command_line_arguments;
+    signal(*query_semaphore);
 
     the_window := create_window(window_width, window_height, "Voronoi");
 
@@ -267,7 +329,6 @@ main :: () {
     assert(font != null);
 
     quit := false;
-    previous_frame_page_height := 0;
     while !quit {
         mouse_click = false;
 
@@ -279,6 +340,7 @@ main :: () {
                 window_height = it.height;
             }
         }
+        wheel_delta := 0;
         for events_this_frame {
             if it.type == {
                 case .QUIT; quit = true;
@@ -288,12 +350,10 @@ main :: () {
                 case .MOUSE_WHEEL; {
                     SCROLL_DELTA :: 100;
                     if it.wheel_delta < 0 {
-                        page.scroll_y -= SCROLL_DELTA;
+                        wheel_delta -= SCROLL_DELTA;
                     } else if it.wheel_delta > 0 {
-                        page.scroll_y += SCROLL_DELTA;
+                        wheel_delta += SCROLL_DELTA;
                     }
-                    page.scroll_y = min(page.scroll_y, 0);
-                    // TODO: bottom scroll limit
                 }
                 case; print("%\n", it);
             }
@@ -306,19 +366,28 @@ main :: () {
             using BACKGROUND_COLOR;
             Simp.clear_render_target(x, y, z, w);
         }
-        
+
         // TODO: render cool background from https://github.com/tsoding/voronoi-opengl
-        action, page_height := immediate_page(page);
-        previous_frame_page_height = page_height;
-        if action.type == {
-            case .NONE;
-            case .CLICK_LINK;
-                // TODO: make queries without blocking UI
-                if !page_query(*page, ctx, action.link) {
-                    exit(1); // TODO: we should probably not exit on errors like that
-                             //   Display some sort of error page instead
-                }
-        }
+        lock(*page_mutex);
+            page.scroll_y = min(page.scroll_y + wheel_delta, 0);
+            // TODO: bottom scroll limit
+
+            action := immediate_page(page);
+            if action.type == {
+                case .NONE;
+                case .CLICK_LINK;
+                    if #complete page.status == {
+                        case .LOADED;
+                            free(page.url);
+                            page.url = copy_string(action.link);
+                            signal(*query_semaphore);
+                        case .LOADING;
+                            log_error("TODO: Cannot query while loading");
+                        case .ERROR;
+                            assert(false, "TODO: unreachable");
+                    }
+            }
+        unlock(*page_mutex);
 
         Simp.swap_buffers(the_window);
 
