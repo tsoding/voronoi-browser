@@ -13,10 +13,11 @@ Simp :: #import "Simp";
 
 #import "OpenSSL";
 
-GEMINI_PORT :: "1965";
-BACKGROUND_COLOR :: Vector4.{0x18/255., 0x18/255., 0x18/255., 1};
+GEMINI_PORT         :: "1965";
+GEMINI_URI_PREFIX   :: "gemini://";
+GEMINI_URI_MAX_SIZE :: 1024;
 GEMTEXT_LINK_PREFIX :: "=>";
-GEMINI_MAX_URI_SIZE :: 1024;
+BACKGROUND_COLOR    :: Vector4.{0x18/255., 0x18/255., 0x18/255., 1};
 
 shift :: inline (xs: *[]$T) -> T {
     assert(xs.count > 0);
@@ -35,15 +36,14 @@ ssl_log_errors :: () {
 }
 
 extract_host_from_gemini_url :: (url: string) -> (host: string, ok: bool) {
-    gemini_prefix :: "gemini://";
-    if !begins_with(url, gemini_prefix) {
-        log_error("Invalid URL `%`: Does not start with `%`", url, gemini_prefix);
+    if !begins_with(url, GEMINI_URI_PREFIX) {
+        log_error("Invalid URL `%`: Does not start with `%`", url, GEMINI_URI_PREFIX);
         return "", false;
     }
 
     host := url;
-    host.data  += gemini_prefix.count;
-    host.count -= gemini_prefix.count;
+    host.data  += GEMINI_URI_PREFIX.count;
+    host.count -= GEMINI_URI_PREFIX.count;
     _, host = split_from_left(host, #char "/");
     return host, true;
 }
@@ -168,12 +168,12 @@ Page :: struct {
     // So we are taking advantage of that and just make the page
     // struct own the bytes of the url so we can simplify the memory
     // management.
-    url_data: [GEMINI_MAX_URI_SIZE]u8;
+    url_data: [GEMINI_URI_MAX_SIZE]u8;
     url_count: int;
 }
 
 page_set_url :: inline (using page: *Page, url: string) {
-    url_count = min(url.count, GEMINI_MAX_URI_SIZE);
+    url_count = min(url.count, GEMINI_URI_MAX_SIZE);
     memcpy(url_data.data, url.data, url_count);
 }
 
