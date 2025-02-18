@@ -18,7 +18,7 @@ BACKGROUND_COLOR :: Vector4.{0x18/255., 0x18/255., 0x18/255., 1};
 GEMTEXT_LINK_PREFIX :: "=>";
 GEMINI_MAX_URI_SIZE :: 1024;
 
-shift :: (xs: *[]$T) -> T #expand {
+shift :: inline (xs: *[]$T) -> T {
     assert(xs.count > 0);
     result := xs.data;
     xs.data += 1;
