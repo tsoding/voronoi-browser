@@ -15,6 +15,7 @@ Simp :: #import "Simp";
 
 GEMINI_PORT :: "1965";
 BACKGROUND_COLOR :: Vector4.{0x18/255., 0x18/255., 0x18/255., 1};
+GEMTEXT_LINK_PREFIX :: "=>";
 
 shift :: (xs: *[]$T) -> T #expand {
     assert(xs.count > 0);
@@ -139,15 +140,25 @@ make_gemini_query :: (ctx: *SSL_CTX, url: string) -> (response: string, ok: bool
     return builder_to_string(*sb), true;
 }
 
+Page_Item :: struct {
+    kind: enum {
+        TEXT;
+        LINK;
+    };
+    text: string;
+    link: string;
+}
 
 Page :: struct {
-    status : enum {
+    status: enum {
         LOADING;
         LOADED;
         ERROR;
     } = .LOADED;
 
-    text: string;
+    // TODO: maybe all the page owned data should be in it's own separate pool?
+    data: *void; // The pointer that owns the data of the page all the strings are pointing to (except the url, it's a separate allocation on the heap). free() this pointer to dispose the page.
+    items: [..]Page_Item;
     url: string;
     scroll_y: int;
 }
@@ -168,12 +179,33 @@ start_query_thread :: () {
 
             lock(*page_mutex);
                 page.scroll_y = 0;
-                free(page.text.data);
-                page.text.data = null;
-                page.text.count = 0;
+                free(page.data);
+                page.data = null;
+                page.items.count = 0;
                 if ok {
                     page.status = .LOADED;
-                    page.text = response;
+                    page.data = response.data;
+                    while response.count > 0 {
+                        line: string;
+                        _, line, response = split_from_left(response, #char "\n");
+                        if begins_with(line, GEMTEXT_LINK_PREFIX) {
+                            link       := line;
+                            link.data  += GEMTEXT_LINK_PREFIX.count;
+                            link.count -= GEMTEXT_LINK_PREFIX.count;
+                            link        = trim_left(link);
+                            _, link = split_from_left_by_any(link, " \t");
+                            array_add(*page.items, .{
+                                kind = .LINK,
+                                text = line,
+                                link = link,
+                            });
+                        } else {
+                            array_add(*page.items, .{
+                                kind = .TEXT,
+                                text = line,
+                            });
+                        }
+                    }
                 } else {
                     page.status = .ERROR;
                 }
@@ -230,8 +262,6 @@ immediate_page :: (page: Page) -> (action: Page_Action) {
             SPINNER_SIZE :: 50;
             SPINNER_COLOR :: Vector4.{1, 1, 1, 1};
             SPINNER_PADDING :: 30;
-            // cx := SPINNER_SIZE + SPINNER_PADDING;
-            // cy := window_height - (SPINNER_SIZE + SPINNER_PADDING);
             cx := window_width/2;
             cy := window_height/2;
             ps : [4]Vector2;
@@ -246,36 +276,30 @@ immediate_page :: (page: Page) -> (action: Page_Action) {
         case .LOADED;
             text_x := window_width/2 - content_width/2;
             text_y := page.scroll_y + font.character_height + line_padding;
-            for line: split(page.text, "\n",, allocator = temp) {
+            for item: page.items {
                 if text_y > window_height + font.character_height break;
-                link_prefix :: "=>";
                 color := Vector4.{1, 1, 1, 1};
                 // TODO: the hitbox of a link does not take into account word wrapping
-                if begins_with(line, link_prefix) && text_y - font.character_height <= mouse_y && mouse_y <= text_y {
+                if item.kind == .LINK && text_y - font.character_height <= mouse_y && mouse_y <= text_y {
                     color = .{1, 0, 0, 1};
                     if mouse_click {
-                        link       := line;
-                        link.data  += link_prefix.count;
-                        link.count -= link_prefix.count;
-                        link        = trim_left(link);
-                        _, link = split_from_left_by_any(link, " \t");
-                        if begins_with(link, "gemini://") {
+                        if begins_with(item.link, "gemini://") {
                             action = .{
                                 type = .CLICK_LINK,
-                                link = link,
+                                link = item.link,
                             };
-                        } else if begins_with(link, "https://") {
+                        } else if begins_with(item.link, "https://") {
                             log("TODO: implement opening Web links in the default browser");
                         } else {
                             action = .{
                                 type = .CLICK_LINK,
-                                link = join(page.url, link,, allocator = temp),  // TODO: better handling of relative links
+                                link = join(page.url, item.link,, allocator = temp),  // TODO: better handling of relative links
                             };
                         }
                     }
                 }
                 Simp.begin_prepare_text(font);
-                for split(line, " ",, allocator = temp) {
+                for split(item.text, " ",, allocator = temp) {
                     // TODO: word wrap overshoots a word
                     // We should probably introduce some sort of rollback for append_prepare_text
                     Simp.append_prepare_text(font, it);
