@@ -16,6 +16,7 @@ Simp :: #import "Simp";
 GEMINI_PORT :: "1965";
 BACKGROUND_COLOR :: Vector4.{0x18/255., 0x18/255., 0x18/255., 1};
 GEMTEXT_LINK_PREFIX :: "=>";
+GEMINI_MAX_URI_SIZE :: 1024;
 
 shift :: (xs: *[]$T) -> T #expand {
     assert(xs.count > 0);
@@ -159,8 +160,26 @@ Page :: struct {
     // TODO: maybe all the page owned data should be in it's own separate pool?
     data: *void; // The pointer that owns the data of the page all the strings are pointing to (except the url, it's a separate allocation on the heap). free() this pointer to dispose the page.
     items: [..]Page_Item;
-    url: string;
     scroll_y: int;
+    // From https://geminiprotocol.net/docs/protocol-specification.gmi#requests
+    // >When making a request, the URI MUST NOT exceed 1024 bytes, and
+    // >a server MUST reject requests where the URI exceeds this
+    // >limit. A server MUST reject a request with a userinfo portion.
+    //
+    // So we are taking advantage of that and just make the page
+    // struct own the bytes of the url so we can simplify the memory
+    // management.
+    url_data: [GEMINI_MAX_URI_SIZE]u8;
+    url_count: int;
+}
+
+page_set_url :: inline (page: *Page, url: string) {
+    page.url_count = min(url.count, GEMINI_MAX_URI_SIZE);
+    memcpy(page.url_data.data, url.data, page.url_count);
+}
+
+page_get_url :: inline (using page: Page) -> string {
+    return .{data = url_data.data, count = url_count};
 }
 
 start_query_thread :: () {
@@ -172,7 +191,7 @@ start_query_thread :: () {
 
             lock(*page_mutex);
                 page.status = .LOADING;
-                url := copy_string(page.url,, allocator = temp);
+                url := copy_string(page_get_url(page),, allocator = temp); // Making a copy of URL so we can access it outside of page_mutex while making a request
             unlock(*page_mutex);
 
             response, ok := make_gemini_query(ctx, url);
@@ -293,7 +312,7 @@ immediate_page :: (page: Page) -> (action: Page_Action) {
                         } else {
                             action = .{
                                 type = .CLICK_LINK,
-                                link = join(page.url, item.link,, allocator = temp),  // TODO: better handling of relative links
+                                link = join(page_get_url(page), item.link,, allocator = temp),  // TODO: better handling of relative links
                             };
                         }
                     }
@@ -332,7 +351,7 @@ main :: () {
         print("ERROR: expected gemini URL\n");
         exit(1);
     }
-    url_from_command_line_arguments := copy_string(shift(*args));
+    url_from_command_line_arguments := shift(*args);
 
     OpenSSL_add_all_algorithms();
     SSL_load_error_strings();
@@ -344,7 +363,7 @@ main :: () {
     }
     defer SSL_CTX_free(ctx);
 
-    page.url = url_from_command_line_arguments;
+    page_set_url(*page, url_from_command_line_arguments);
     start_query_thread();
     signal(*query_semaphore);
 
@@ -404,8 +423,7 @@ main :: () {
                 case .CLICK_LINK;
                     if #complete page.status == {
                         case .LOADED;
-                            free(page.url);
-                            page.url = copy_string(action.link);
+                            page_set_url(*page, action.link);
                             signal(*query_semaphore);
                         case .LOADING;
                             log_error("TODO: Cannot query while loading");
