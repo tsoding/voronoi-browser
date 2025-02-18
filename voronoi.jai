@@ -121,6 +121,7 @@ make_gemini_query :: (ctx: *SSL_CTX, url: string) -> (response: string, ok: bool
     append(*sb, "\r\n");
     request := builder_to_string(*sb);
 
+    // TODO: maybe write in a loop to ensure everything's written?
     if SSL_write(ssl, request.data, xx request.count) <= 0 {
         ssl_log_errors();
         return "", false;
@@ -134,6 +135,7 @@ make_gemini_query :: (ctx: *SSL_CTX, url: string) -> (response: string, ok: bool
     }
 
     if n < 0 {
+        reset(*sb);
         ssl_log_errors();
         return "", false;
     }
@@ -157,10 +159,11 @@ Page :: struct {
         ERROR;
     } = .LOADED;
 
-    // TODO: maybe all the page owned data should be in it's own separate pool?
-    data: *void; // The pointer that owns the data of the page all the strings are pointing to (except the url, it's a separate allocation on the heap). free() this pointer to dispose the page.
     items: [..]Page_Item;
+    items_pool: Flat_Pool; // All the strings of items are allocated in this pool so you can dispose all of them at once
+
     scroll_y: int;
+
     // From https://geminiprotocol.net/docs/protocol-specification.gmi#requests
     // >When making a request, the URI MUST NOT exceed 1024 bytes, and
     // >a server MUST reject requests where the URI exceeds this
@@ -173,9 +176,9 @@ Page :: struct {
     url_count: int;
 }
 
-page_set_url :: inline (page: *Page, url: string) {
-    page.url_count = min(url.count, GEMINI_MAX_URI_SIZE);
-    memcpy(page.url_data.data, url.data, page.url_count);
+page_set_url :: inline (using page: *Page, url: string) {
+    url_count = min(url.count, GEMINI_MAX_URI_SIZE);
+    memcpy(url_data.data, url.data, url_count);
 }
 
 page_get_url :: inline (using page: Page) -> string {
@@ -198,15 +201,19 @@ start_query_thread :: () {
 
             lock(*page_mutex);
                 page.scroll_y = 0;
-                free(page.data);
-                page.data = null;
+                reset(*page.items_pool, overwrite_memory=true);
                 page.items.count = 0;
                 if ok {
                     page.status = .LOADED;
-                    page.data = response.data;
+
+                    items_pool_allocator: Allocator;
+                    items_pool_allocator.proc = flat_pool_allocator_proc;
+                    items_pool_allocator.data = *page.items_pool;
+                    original_response_to_free_at_the_end_of_parsing := response;
                     while response.count > 0 {
                         line: string;
                         _, line, response = split_from_left(response, #char "\n");
+                        line = copy_string(line,, allocator = items_pool_allocator);
                         if begins_with(line, GEMTEXT_LINK_PREFIX) {
                             link       := line;
                             link.data  += GEMTEXT_LINK_PREFIX.count;
@@ -225,6 +232,7 @@ start_query_thread :: () {
                             });
                         }
                     }
+                    free(original_response_to_free_at_the_end_of_parsing);
                 } else {
                     page.status = .ERROR;
                 }
