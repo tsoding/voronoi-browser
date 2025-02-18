@@ -153,11 +153,7 @@ Page_Item :: struct {
 }
 
 Page :: struct {
-    status: enum {
-        LOADING;
-        LOADED;
-        ERROR;
-    } = .LOADED;
+    loading := false;
 
     items: [..]Page_Item;
     items_pool: Flat_Pool; // All the strings of items are allocated in this pool so you can dispose all of them at once
@@ -193,22 +189,23 @@ start_query_thread :: () {
             wait_for(*query_semaphore);
 
             lock(*page_mutex);
-                page.status = .LOADING;
+                assert(!page.loading);
+                page.loading = true;
                 url := copy_string(page_get_url(page),, allocator = temp); // Making a copy of URL so we can access it outside of page_mutex while making a request
             unlock(*page_mutex);
 
             response, ok := make_gemini_query(ctx, url);
 
             lock(*page_mutex);
+                page.loading = false;
                 page.scroll_y = 0;
                 reset(*page.items_pool, overwrite_memory=true);
                 page.items.count = 0;
-                if ok {
-                    page.status = .LOADED;
 
-                    items_pool_allocator: Allocator;
-                    items_pool_allocator.proc = flat_pool_allocator_proc;
-                    items_pool_allocator.data = *page.items_pool;
+                items_pool_allocator: Allocator;
+                items_pool_allocator.proc = flat_pool_allocator_proc;
+                items_pool_allocator.data = *page.items_pool;
+                if ok {
                     original_response_to_free_at_the_end_of_parsing := response;
                     while response.count > 0 {
                         line: string;
@@ -234,7 +231,17 @@ start_query_thread :: () {
                     }
                     free(original_response_to_free_at_the_end_of_parsing);
                 } else {
-                    page.status = .ERROR;
+                    // TODO: Print exact network error
+                    // It could be extracted from make_gemini_query()
+                    array_add(*page.items, .{
+                        kind = .TEXT,
+                        text = "# Network error while loading the page",
+                    });
+                    array_add(*page.items, .{
+                        kind = .LINK,
+                        text = "=> gemini://geminiprotocol.net/ Go to the official Gemini Protocol website",
+                        link = "gemini://geminiprotocol.net/",
+                    });
                 }
             unlock(*page_mutex);
 
@@ -274,74 +281,68 @@ immediate_page :: (page: Page) -> (action: Page_Action) {
     content_width := min(max_content_width, window_width);
 
     line_padding := 10;
+
     // TODO: horizontal scroll
     //   Is it really needed if we are wrapping words?
     // TODO: smooth vertical scroll (scroll velocity)
     // TODO: vertical scroll bar
-    if page.status == {
-        case .ERROR;
-            text_x := window_width/2 - content_width/2;
-            text_y := font.character_height + line_padding;
-            Simp.prepare_text(font, "ERROR");
-            Simp.draw_prepared_text(font, text_x, text_y);
-        case .LOADING;
-            Simp.set_shader_for_color();
-            SPINNER_SIZE :: 50;
-            SPINNER_COLOR :: Vector4.{1, 1, 1, 1};
-            SPINNER_PADDING :: 30;
-            cx := window_width/2;
-            cy := window_height/2;
-            ps : [4]Vector2;
-            a  : float = xx seconds_since_init()*4.0;
-            for *ps {
-                it.x = cx + cos(a)*SPINNER_SIZE;
-                it.y = cy + sin(a)*SPINNER_SIZE;
-                a += PI/2.0;
+    if page.loading {
+        Simp.set_shader_for_color();
+        SPINNER_SIZE :: 50;
+        SPINNER_COLOR :: Vector4.{1, 1, 1, 1};
+        SPINNER_PADDING :: 30;
+        cx := window_width/2;
+        cy := window_height/2;
+        ps : [4]Vector2;
+        a  : float = xx seconds_since_init()*4.0;
+        for *ps {
+            it.x = cx + cos(a)*SPINNER_SIZE;
+            it.y = cy + sin(a)*SPINNER_SIZE;
+            a += PI/2.0;
+        }
+        Simp.immediate_quad(ps[0], ps[1], ps[2], ps[3], SPINNER_COLOR);
+    }
+
+    text_x := window_width/2 - content_width/2;
+    text_y := page.scroll_y + font.character_height + line_padding;
+    for item: page.items {
+        if text_y > window_height + font.character_height break;
+        color := Vector4.{1, 1, 1, 1};
+        // TODO: the hitbox of a link does not take into account word wrapping
+        if item.kind == .LINK && text_y - font.character_height <= mouse_y && mouse_y <= text_y {
+            color = .{1, 0, 0, 1};
+            if mouse_click {
+                if begins_with(item.link, "gemini://") {
+                    action = .{
+                        type = .CLICK_LINK,
+                        link = item.link,
+                    };
+                } else if begins_with(item.link, "https://") {
+                    log("TODO: implement opening Web links in the default browser");
+                } else {
+                    action = .{
+                        type = .CLICK_LINK,
+                        link = join(page_get_url(page), item.link,, allocator = temp),  // TODO: better handling of relative links
+                    };
+                }
             }
-            Simp.immediate_quad(ps[0], ps[1], ps[2], ps[3], SPINNER_COLOR);
-            #through;
-        case .LOADED;
-            text_x := window_width/2 - content_width/2;
-            text_y := page.scroll_y + font.character_height + line_padding;
-            for item: page.items {
-                if text_y > window_height + font.character_height break;
-                color := Vector4.{1, 1, 1, 1};
-                // TODO: the hitbox of a link does not take into account word wrapping
-                if item.kind == .LINK && text_y - font.character_height <= mouse_y && mouse_y <= text_y {
-                    color = .{1, 0, 0, 1};
-                    if mouse_click {
-                        if begins_with(item.link, "gemini://") {
-                            action = .{
-                                type = .CLICK_LINK,
-                                link = item.link,
-                            };
-                        } else if begins_with(item.link, "https://") {
-                            log("TODO: implement opening Web links in the default browser");
-                        } else {
-                            action = .{
-                                type = .CLICK_LINK,
-                                link = join(page_get_url(page), item.link,, allocator = temp),  // TODO: better handling of relative links
-                            };
-                        }
-                    }
-                }
-                Simp.begin_prepare_text(font);
-                for split(item.text, " ",, allocator = temp) {
-                    // TODO: word wrap overshoots a word
-                    // We should probably introduce some sort of rollback for append_prepare_text
-                    Simp.append_prepare_text(font, it);
-                    Simp.append_prepare_text(font, " ");
-                    if font.temporary_glyphs_width_in_pixels >= content_width {
-                        Simp.end_prepare_text(font);
-                        Simp.draw_prepared_text(font, text_x, text_y, color);
-                        text_y += font.character_height + line_padding;
-                        Simp.begin_prepare_text(font);
-                    }
-                }
+        }
+        Simp.begin_prepare_text(font);
+        for split(item.text, " ",, allocator = temp) {
+            // TODO: word wrap overshoots a word
+            // We should probably introduce some sort of rollback for append_prepare_text
+            Simp.append_prepare_text(font, it);
+            Simp.append_prepare_text(font, " ");
+            if font.temporary_glyphs_width_in_pixels >= content_width {
                 Simp.end_prepare_text(font);
                 Simp.draw_prepared_text(font, text_x, text_y, color);
                 text_y += font.character_height + line_padding;
+                Simp.begin_prepare_text(font);
             }
+        }
+        Simp.end_prepare_text(font);
+        Simp.draw_prepared_text(font, text_x, text_y, color);
+        text_y += font.character_height + line_padding;
     }
 
     return action;
@@ -426,17 +427,14 @@ main :: () {
             // TODO: bottom scroll limit
 
             action := immediate_page(page);
-            if action.type == {
+            if #complete action.type == {
                 case .NONE;
                 case .CLICK_LINK;
-                    if #complete page.status == {
-                        case .LOADED;
-                            page_set_url(*page, action.link);
-                            signal(*query_semaphore);
-                        case .LOADING;
-                            log_error("TODO: Cannot query while loading");
-                        case .ERROR;
-                            assert(false, "TODO: unreachable");
+                    if page.loading {
+                        log_error("TODO: Cannot query while loading");
+                    } else {
+                        page_set_url(*page, action.link);
+                        signal(*query_semaphore);
                     }
             }
         unlock(*page_mutex);
